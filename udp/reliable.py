@@ -3,7 +3,9 @@
 UDP can lose, duplicate and reorder datagrams. This class adds:
 - "seq": a number on every packet we send to an address. For unreliable
   messages (STATE, INPUT, PING) the receiver keeps only the newest one
-  and drops anything older ("newest wins").
+  of each type and drops anything older ("newest wins"). It is per type
+  because different threads send different types: a PONG may leave
+  before an older-numbered STATE, and that STATE is still new.
 - "rseq": a separate counter for reliable messages (protocol.RELIABLE).
   Each one is acknowledged with an ACK and resent until acknowledged.
   The receiver delivers them exactly once and in order, holding back
@@ -29,7 +31,7 @@ class ReliableUDP:
         self.pending = {}           # (addr, rseq) -> [data, last_sent, tries]
         self.expected = {}          # addr -> next reliable seq we expect to deliver
         self.held = {}              # addr -> {rseq: msg} arrived early, waiting for a gap
-        self.last_unreliable = {}   # addr -> newest unreliable seq delivered
+        self.last_unreliable = {}   # (addr, type) -> newest seq delivered for that type
         self.stats = {"sent": 0, "received": 0, "resent": 0, "dropped_old": 0,
                       "duplicates": 0, "reordered": 0, "lost_sim": 0}
 
@@ -106,11 +108,12 @@ class ReliableUDP:
             return ready, addr
 
         if seq is not None:
+            key = (addr, msg["type"])
             with self.lock:
-                if seq <= self.last_unreliable.get(addr, -1):
+                if seq <= self.last_unreliable.get(key, -1):
                     self.stats["dropped_old"] += 1
                     return [], addr
-                self.last_unreliable[addr] = seq
+                self.last_unreliable[key] = seq
         self.stats["received"] += 1
         return [msg], addr
 
@@ -136,7 +139,9 @@ class ReliableUDP:
     def forget(self, addr):
         """Drop all state for a disconnected address."""
         with self.lock:
-            for table in (self.next_seq, self.next_rseq, self.expected, self.held, self.last_unreliable):
+            for table in (self.next_seq, self.next_rseq, self.expected, self.held):
                 table.pop(addr, None)
+            for key in [k for k in self.last_unreliable if k[0] == addr]:
+                del self.last_unreliable[key]
             for key in [k for k in self.pending if k[0] == addr]:
                 del self.pending[key]

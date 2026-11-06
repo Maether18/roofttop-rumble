@@ -86,7 +86,7 @@ rooftop-rumble/
 │   └── reliable.py    # our reliability layer: seq, acks, resends, ordering
 ├── client/
 │   ├── console.py     # terminal client for testing (rooms, chat, scores)
-│   └── ui.py          # pygame screens: login, lobby, game, results (to build)
+│   └── ui.py          # the game window: connect, lobby, match, results
 ├── tools/
 │   └── bots.py        # bot players to test the server without 3 people
 ├── docs/
@@ -105,42 +105,48 @@ rooftop-rumble/
 pip install -r requirements.txt
 ```
 
-### Run the TCP version
+### Run the game
 
-On the **server computer**:
+**1. Start the server** on one computer (TCP or UDP):
 ```bash
 python -m tcp.server
-```
-The server prints its IP address. On **each client computer**:
-```bash
-python -m tcp.client --host <SERVER_IP> --name Kai
-```
-
-### Run the UDP version
-
-On the **server computer**:
-```bash
 python -m udp.server
 ```
-On **each client computer**:
+It prints its IP address, for example `192.168.1.23`.
+
+**2. Start the game window** on each player's computer:
 ```bash
-python -m udp.client --host <SERVER_IP> --name Kai
+python -m client.ui
+```
+Type your name and the server IP, pick **TCP** or **UDP** (the same as the server), and click **Connect**. In the lobby, one player creates a room, the others join, and the owner clicks **Start match**.
+
+You can also fill everything from the command line:
+```bash
+python -m client.ui --protocol udp --host 192.168.1.23 --name Kai --auto-connect
 ```
 
-### Terminal commands (until the game window is ready)
-In a client terminal: `/rooms`, `/create [name]`, `/join <id>`, `/leave`, `/start`, `/stats`, `/quit`. Anything else is a chat message.
+**Controls:** A/D or arrows to move, W/Up/Space to jump (twice in the air), S/Down to drop through a platform, J to punch, K for a charged smash, F3 to show or hide the network stats.
 
-### Testing on one computer
-Use `--host 127.0.0.1` (the default) and open several terminals. For the real demo, use four computers on the same network.
+### Play against bots
+Create a room in the game window, then in another terminal:
+```bash
+python -m tools.bots --protocol tcp --bots 2 --join-only
+```
+The bots join your room. Click **Start match**.
 
-### Testing with bots
-Bots log in, create a room, play a full match and print the results:
+### Test the server with bots only
 ```bash
 python -m tcp.server --duration 30
 python -m tools.bots --protocol tcp
 python -m tools.bots --protocol tcp --kill-one 10            # one bot quits mid-match
 python -m tools.bots --protocol udp --loss 0.1 --delay 50    # with the UDP server running
 ```
+
+### Terminal client
+`python -m tcp.client --name Kai` (or `udp.client`) gives a text client with `/rooms`, `/create`, `/join <id>`, `/leave`, `/start`, `/stats`, `/quit`. Anything else is a chat message.
+
+### Testing on one computer
+Use `--host 127.0.0.1` (the default) and open several terminals. For the real demo, use four computers on the same network.
 
 ### Firewall
 If clients can't connect, allow Python through the firewall on the server computer, or open ports `5000` (TCP) and `5001` (UDP).
@@ -150,8 +156,9 @@ If clients can't connect, allow Python through the firewall on the server comput
 Both versions can simulate bad network conditions so we can measure the difference fairly:
 
 ```bash
-python -m udp.client --host <SERVER_IP> --name Kai --loss 0.10 --delay 80
+python -m client.ui --protocol udp --host <SERVER_IP> --name Kai --loss 0.10 --delay 80 --log metrics.csv
 ```
+`--log` writes one row per second during matches: ping, snapshots received, snapshots missed, and the longest gap between two snapshots. Open the CSV in Excel to build the comparison charts.
 
 Metrics we measure:
 - **Perceived lag**: round-trip time between sending an input and seeing its result.
@@ -178,8 +185,8 @@ Metrics we measure:
 - [x] Disconnection handling in both versions
 - [x] UDP reliability: acks, resends, in-order delivery of critical messages
 - [x] Packet loss and delay simulation (UDP client)
-- [ ] Game window with pygame (`client/ui.py`)
-- [ ] Metrics logging to CSV for the comparison
+- [x] Game window with pygame (`client/ui.py`)
+- [x] Metrics logging to CSV (`--log`)
 - [ ] Test on 4 computers
 - [ ] Slides (5 to 7)
 - [ ] Bonus: cross-network play
