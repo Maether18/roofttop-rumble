@@ -1,94 +1,123 @@
-"""TCP server (starter).
+"""TCP server. Uses TCP only.
 
-Working today: login with unique names, chat broadcast, heartbeats,
-disconnect detection, one thread per client.
-TODO: rooms, game loop (common.game.Game), STATE broadcast, GAME_OVER.
+- One TCP connection per player, one thread per connection.
+- Messages are framed as one JSON object per line (TCP is a byte stream).
+- Disconnects are detected when recv() returns nothing or fails, or when
+  a player sends nothing (not even a heartbeat) for DISCONNECT_TIMEOUT.
+- Lobby, rooms and the game itself live in common/lobby.py and
+  common/game.py, shared with the UDP version.
 
 Run: python -m tcp.server
+     python -m tcp.server --duration 30     (shorter matches for testing)
 """
+import argparse
 import socket
 import threading
-import time
 
 from common import protocol as P
-from common.config import TCP_PORT, DISCONNECT_TIMEOUT
+from common.config import TCP_PORT, DISCONNECT_TIMEOUT, MATCH_SECONDS
+from common.lobby import Lobby
+
+
+class Connection:
+    """A connected player's socket. The lock stops two threads (for example
+    the game loop and a lobby reply) from mixing their bytes together."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.lock = threading.Lock()
+
+    def send(self, msg):
+        data = P.encode_line(msg)
+        with self.lock:
+            self.sock.sendall(data)
 
 
 class Server:
-    def __init__(self, port=TCP_PORT):
+    def __init__(self, port=TCP_PORT, match_seconds=MATCH_SECONDS):
         self.port = port
-        self.clients = {}            # name -> client info
+        self.clients = {}                 # name -> Connection
         self.lock = threading.Lock()
+        self.lobby = Lobby(self.send_to, match_seconds=match_seconds)
 
     # ---------- sending ----------
-    def send(self, conn, msg):
-        try:
-            conn.sendall(P.encode_line(msg))
-        except OSError:
-            pass  # the reader thread will notice the disconnect
+    def send_to(self, name, msg):
+        with self.lock:
+            conn = self.clients.get(name)
+        if conn:
+            try:
+                conn.send(msg)
+            except OSError:
+                pass                      # its reader thread will notice and clean up
 
     def broadcast(self, msg, exclude=None):
         with self.lock:
-            targets = [c["conn"] for n, c in self.clients.items() if n != exclude]
-        for conn in targets:
-            self.send(conn, msg)
+            names = [n for n in self.clients if n != exclude]
+        for n in names:
+            self.send_to(n, msg)
 
-    # ---------- per-client thread ----------
-    def handle_client(self, conn, addr):
+    # ---------- one thread per connected player ----------
+    def handle_client(self, sock, addr):
+        conn = Connection(sock)
         reader = P.LineReader()
         name = None
-        conn.settimeout(DISCONNECT_TIMEOUT)
+        sock.settimeout(DISCONNECT_TIMEOUT)
+        reason = "connection closed"
         try:
             while True:
                 try:
-                    data = conn.recv(4096)
+                    data = sock.recv(4096)
                 except socket.timeout:
-                    print(f"[timeout] {name or addr} sent nothing for {DISCONNECT_TIMEOUT}s")
+                    reason = f"no message for {DISCONNECT_TIMEOUT}s"
                     break
-                if not data:          # empty read = the client closed the connection
+                if not data:              # empty read: the client closed the connection
                     break
                 for msg in reader.feed(data):
                     if name is None:
-                        name = self.handle_login(conn, msg)
+                        name = self.login(conn, msg)
                     else:
                         self.handle_message(name, conn, msg)
-        except (ConnectionResetError, OSError):
-            pass
+        except (ConnectionResetError, ConnectionAbortedError, OSError):
+            reason = "connection reset"
         finally:
-            conn.close()
+            sock.close()
             if name:
-                self.remove(name)
+                self.logout(name, reason)
 
-    def handle_login(self, conn, msg):
-        if msg["type"] != P.LOGIN:
-            self.send(conn, P.make(P.ERROR, reason="Log in first"))
+    def login(self, conn, msg):
+        try:
+            if msg["type"] != P.LOGIN:
+                conn.send(P.make(P.ERROR, reason="Log in first"))
+                return None
+            name = str(msg.get("name", "")).strip()[:16]
+            with self.lock:
+                ok = bool(name) and name not in self.clients
+                if ok:
+                    self.clients[name] = conn
+            if not ok:
+                conn.send(P.make(P.LOGIN_FAIL, reason="Name empty or already taken"))
+                return None
+            conn.send(P.make(P.LOGIN_OK, name=name, players=list(self.clients)))
+        except OSError:
             return None
-        name = str(msg.get("name", "")).strip()[:16]
-        with self.lock:
-            taken = not name or name in self.clients
-            if not taken:
-                self.clients[name] = {"conn": conn, "room": None}
-        if taken:
-            self.send(conn, P.make(P.LOGIN_FAIL, reason="Name empty or already taken"))
-            return None
-        self.send(conn, P.make(P.LOGIN_OK, name=name, players=list(self.clients)))
-        self.broadcast(P.make(P.CHAT, sender="server", text=f"{name} joined"), exclude=name)
         print(f"[login] {name} ({len(self.clients)} online)")
+        self.lobby.add_player(name)
         return name
 
     def handle_message(self, name, conn, msg):
         t = msg["type"]
         if t == P.PING:
-            self.send(conn, P.make(P.PONG, t=msg.get("t")))
+            self.send_to(name, P.make(P.PONG, t=msg.get("t")))
         elif t == P.CHAT:
             self.broadcast(P.make(P.CHAT, sender=name, text=str(msg.get("text", ""))[:200]))
-        # TODO: CREATE_ROOM, JOIN_ROOM, LEAVE_ROOM, START_GAME, INPUT
+        else:
+            self.lobby.handle(name, msg)
 
-    def remove(self, name):
+    def logout(self, name, reason):
         with self.lock:
             self.clients.pop(name, None)
-        print(f"[left] {name} ({len(self.clients)} online)")
-        self.broadcast(P.make(P.PLAYER_LEFT, name=name))
+        print(f"[left] {name}: {reason} ({len(self.clients)} online)")
+        self.lobby.remove_player(name)
 
     # ---------- main ----------
     def run(self):
@@ -98,16 +127,16 @@ class Server:
         srv.listen()
         print(f"TCP server listening on {local_ip()}:{self.port}")
         while True:
-            conn, addr = srv.accept()
-            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # no batching delay
-            threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
+            sock, addr = srv.accept()
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   # send small packets immediately
+            threading.Thread(target=self.handle_client, args=(sock, addr), daemon=True).start()
 
 
 def local_ip():
     """Best guess of this computer's LAN IP, to show clients where to connect."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("8.8.8.8", 80))  # no packet is sent; it only picks a route
+        s.connect(("8.8.8.8", 80))        # no packet is sent; it only picks a route
         return s.getsockname()[0]
     except OSError:
         return "127.0.0.1"
@@ -116,7 +145,11 @@ def local_ip():
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Rooftop Rumble TCP server")
+    ap.add_argument("--port", type=int, default=TCP_PORT)
+    ap.add_argument("--duration", type=int, default=MATCH_SECONDS, help="match length in seconds")
+    args = ap.parse_args()
     try:
-        Server().run()
+        Server(args.port, args.duration).run()
     except KeyboardInterrupt:
         print("\nServer stopped")

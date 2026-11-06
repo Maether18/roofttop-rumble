@@ -75,15 +75,20 @@ rooftop-rumble/
 ├── common/
 │   ├── config.py      # ports, tick rate, timeouts
 │   ├── protocol.py    # message types and JSON encoding
-│   └── game.py        # game rules (no networking)
+│   ├── game.py        # game rules (no networking)
+│   └── lobby.py       # rooms and the game loop, shared by both servers
 ├── tcp/
 │   ├── server.py      # TCP server
-│   └── client.py      # TCP client
+│   └── client.py      # TCP connection used by the clients
 ├── udp/
-│   ├── server.py      # UDP server with reliability and heartbeats
-│   └── client.py      # UDP client
+│   ├── server.py      # UDP server
+│   ├── client.py      # UDP connection used by the clients
+│   └── reliable.py    # our reliability layer: seq, acks, resends, ordering
 ├── client/
-│   └── ui.py          # pygame screens: login, lobby, game, results
+│   ├── console.py     # terminal client for testing (rooms, chat, scores)
+│   └── ui.py          # pygame screens: login, lobby, game, results (to build)
+├── tools/
+│   └── bots.py        # bot players to test the server without 3 people
 ├── docs/
 │   └── protocol.md    # message reference
 ├── requirements.txt
@@ -122,8 +127,20 @@ On **each client computer**:
 python -m udp.client --host <SERVER_IP> --name Kai
 ```
 
+### Terminal commands (until the game window is ready)
+In a client terminal: `/rooms`, `/create [name]`, `/join <id>`, `/leave`, `/start`, `/stats`, `/quit`. Anything else is a chat message.
+
 ### Testing on one computer
-Use `--host 127.0.0.1` and open several terminals. For the real demo, use four computers on the same network.
+Use `--host 127.0.0.1` (the default) and open several terminals. For the real demo, use four computers on the same network.
+
+### Testing with bots
+Bots log in, create a room, play a full match and print the results:
+```bash
+python -m tcp.server --duration 30
+python -m tools.bots --protocol tcp
+python -m tools.bots --protocol tcp --kill-one 10            # one bot quits mid-match
+python -m tools.bots --protocol udp --loss 0.1 --delay 50    # with the UDP server running
+```
 
 ### Firewall
 If clients can't connect, allow Python through the firewall on the server computer, or open ports `5000` (TCP) and `5001` (UDP).
@@ -154,13 +171,15 @@ Metrics we measure:
 ## Roadmap
 
 - [x] Project structure and protocol
-- [x] TCP and UDP connection, login and chat starter
-- [ ] Lobby: create, join and leave rooms
-- [ ] Game rules and real-time gameplay
-- [ ] Scores, game over and results screen
-- [ ] Disconnection handling in both versions
-- [ ] UDP reliability for critical messages
-- [ ] Packet loss and delay simulation, metrics logging
+- [x] TCP and UDP connection, login and chat
+- [x] Lobby: create, join, leave rooms, start (both versions)
+- [x] Game rules (`common/game.py`)
+- [x] Server game loop: inputs, 20 snapshots/s, events, game over, ranking
+- [x] Disconnection handling in both versions
+- [x] UDP reliability: acks, resends, in-order delivery of critical messages
+- [x] Packet loss and delay simulation (UDP client)
+- [ ] Game window with pygame (`client/ui.py`)
+- [ ] Metrics logging to CSV for the comparison
 - [ ] Test on 4 computers
 - [ ] Slides (5 to 7)
 - [ ] Bonus: cross-network play

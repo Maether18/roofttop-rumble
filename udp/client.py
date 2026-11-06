@@ -1,13 +1,14 @@
-"""UDP client (starter): log in and chat from the terminal.
+"""UDP client connection. Uses UDP only.
 
-Supports simulated packet loss and delay for the TCP vs UDP comparison:
+UDPConnection has the same interface as tcp/client.py's TCPConnection:
+    conn.send(msg), conn.messages (queue), conn.connected (Event), conn.close()
+
+Simulated packet loss and delay, for the TCP vs UDP comparison:
     python -m udp.client --host <SERVER_IP> --name Kai --loss 0.10 --delay 80
-
-TODO: replace the terminal chat with the pygame UI (client/ui.py).
 """
 import argparse
+import queue
 import socket
-import sys
 import threading
 import time
 
@@ -16,84 +17,78 @@ from common.config import UDP_PORT, HEARTBEAT_INTERVAL, DISCONNECT_TIMEOUT
 from udp.reliable import ReliableUDP
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Rooftop Rumble UDP client")
+class UDPConnection:
+    protocol_name = "UDP"
+
+    def __init__(self, host, port, name, loss=0.0, delay_ms=0):
+        self.server = (socket.gethostbyname(host), port)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("0.0.0.0", 0))
+        self.net = ReliableUDP(self.sock, loss=loss, delay_ms=delay_ms)
+        self.stats = self.net.stats
+        self.messages = queue.Queue()
+        self.connected = threading.Event()
+        self.connected.set()
+        self.rtt_ms = None
+        self.last_heard = time.time()
+        self.send(P.make(P.LOGIN, name=name))      # LOGIN must be the first message
+        threading.Thread(target=self._receive_loop, daemon=True).start()
+        threading.Thread(target=self._maintenance_loop, daemon=True).start()
+
+    def send(self, msg):
+        if self.connected.is_set():
+            self.net.send(msg, self.server)
+
+    def _receive_loop(self):
+        while self.connected.is_set():
+            try:
+                messages, addr = self.net.receive()
+            except (ConnectionResetError, OSError):
+                if not self.connected.is_set():
+                    return
+                continue
+            if addr != self.server:
+                continue
+            self.last_heard = time.time()
+            for msg in messages:
+                if msg["type"] == P.PONG and isinstance(msg.get("t"), (int, float)):
+                    self.rtt_ms = (time.time() - msg["t"]) * 1000
+                else:
+                    self.messages.put(msg)
+
+    def _maintenance_loop(self):
+        last_ping = 0.0
+        while self.connected.is_set():
+            if self.net.resend_due():
+                return self._lost("The server stopped answering")
+            now = time.time()
+            if now - last_ping >= HEARTBEAT_INTERVAL:
+                self.send(P.make(P.PING, t=now))
+                last_ping = now
+            if now - self.last_heard > DISCONNECT_TIMEOUT * 2:
+                return self._lost("Connection to the server lost")
+            time.sleep(0.02)
+
+    def _lost(self, reason):
+        if self.connected.is_set():
+            self.connected.clear()
+            self.messages.put(P.make("DISCONNECTED", reason=reason))
+
+    def close(self):
+        self.connected.clear()
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    from client.console import run_console
+    ap = argparse.ArgumentParser(description="Rooftop Rumble UDP client (terminal)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=UDP_PORT)
     ap.add_argument("--name", required=True)
     ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1")
     ap.add_argument("--delay", type=int, default=0, help="simulated one-way delay in ms")
     args = ap.parse_args()
-
-    server = (socket.gethostbyname(args.host), args.port)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", 0))
-    net = ReliableUDP(sock, loss=args.loss, delay_ms=args.delay)
-    running = threading.Event()
-    running.set()
-    last_heard = [time.time()]
-
-    net.send(P.make(P.LOGIN, name=args.name), server)
-
-    def receive():
-        while running.is_set():
-            try:
-                msg, addr = net.receive()
-            except (ConnectionResetError, OSError):
-                continue
-            if addr != server:
-                continue
-            last_heard[0] = time.time()
-            if msg:
-                show(msg)
-
-    def maintenance():
-        last_ping = 0
-        while running.is_set():
-            if net.resend_due():
-                print("\nServer stopped answering")
-                running.clear()
-            now = time.time()
-            if now - last_ping >= HEARTBEAT_INTERVAL:
-                net.send(P.make(P.PING, t=now), server)
-                last_ping = now
-            if now - last_heard[0] > DISCONNECT_TIMEOUT * 2:
-                print("\nLost connection to the server")
-                running.clear()
-            time.sleep(0.05)
-
-    threading.Thread(target=receive, daemon=True).start()
-    threading.Thread(target=maintenance, daemon=True).start()
-
-    print("Type a message and press Enter. Type /stats for network stats, /quit to leave.")
-    try:
-        for line in sys.stdin:
-            if not running.is_set():
-                break
-            line = line.strip()
-            if line == "/quit":
-                break
-            if line == "/stats":
-                print(net.stats)
-            elif line:
-                net.send(P.make(P.CHAT, text=line), server)
-    except KeyboardInterrupt:
-        pass
-    running.clear()
-    sock.close()
-
-
-def show(msg):
-    t = msg["type"]
-    if t == P.LOGIN_OK:
-        print(f"Logged in as {msg['name']}. Online: {', '.join(msg['players'])}")
-    elif t == P.LOGIN_FAIL:
-        print(f"Login failed: {msg['reason']}")
-    elif t == P.CHAT:
-        print(f"[{msg['sender']}] {msg['text']}")
-    elif t == P.PLAYER_LEFT:
-        print(f"{msg['name']} disconnected")
-
-
-if __name__ == "__main__":
-    main()
+    run_console(UDPConnection(args.host, args.port, args.name, args.loss, args.delay))
