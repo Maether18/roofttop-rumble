@@ -168,12 +168,10 @@ Metrics we measure:
 
 ## Team
 
-| Member | Responsibility |
-|---|---|
-| [Name 1] | Game rules (`common/game.py`) |
-| [Name 2] | TCP server and client |
-| [Name 3] | UDP server, client and reliability layer |
-| [Name 4] | Client UI and presentation |
+| Abdelkarim Haamdi |
+| Brahim Amous | 
+| Maether Guennichi |
+| Malek Mimouna |
 
 ## Roadmap
 
