@@ -172,7 +172,10 @@ class App:
         try:
             if self.protocol == "tcp":
                 from tcp.client import TCPConnection
-                self.conn = TCPConnection(host, self.args.port or TCP_PORT, name)
+                self.conn = TCPConnection(
+                    host, self.args.port or TCP_PORT, name,
+                    loss=self.args.loss, delay_ms=self.args.delay,
+                )
             else:
                 from udp.client import UDPConnection
                 self.conn = UDPConnection(host, self.args.port or UDP_PORT, name,
@@ -855,8 +858,8 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0, help="default: 5000 for TCP, 5001 for UDP")
     ap.add_argument("--name", default="")
-    ap.add_argument("--loss", type=float, default=0.0, help="UDP only: simulated packet loss, 0 to 1")
-    ap.add_argument("--delay", type=int, default=0, help="UDP only: simulated one-way delay in ms")
+    ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1 (both TCP and UDP)")
+    ap.add_argument("--delay", type=int, default=0, help="simulated one-way delay in ms (both TCP and UDP)")
     ap.add_argument("--log", default="", help="write per-second network metrics to this CSV file")
     ap.add_argument("--auto-connect", action="store_true", help="connect immediately with --name")
     App(ap.parse_args()).run()
