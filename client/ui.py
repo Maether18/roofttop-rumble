@@ -671,6 +671,11 @@ class App:
         ]
         if self.args.loss or self.args.delay:
             lines.append(f"simulated loss {self.args.loss * 100:.0f}%  delay {self.args.delay} ms")
+            st = getattr(self.conn, "stats", {})
+            if self.conn and self.conn.protocol_name == "TCP":
+                lines.append(f"TCP HoL stalls {st.get('hol_stalls', 0)}  retrans {st.get('retransmitted_sim', 0)}")
+            elif self.conn and self.conn.protocol_name == "UDP":
+                lines.append(f"UDP ack resends {st.get('resent', 0)}  old dropped {st.get('dropped_old', 0)}")
         h = 18 * len(lines) + 12
         box = pygame.Rect(10, ARENA_HEIGHT - h - 10, 290, h)
         pygame.draw.rect(surf, (18, 11, 31), box, border_radius=8)
@@ -678,6 +683,7 @@ class App:
         for i, line in enumerate(lines):
             draw_text(surf, line, self.fonts["mono"], TEXT if i == 0 else MUTED, (20, ARENA_HEIGHT - h - 4 + i * 18))
 
+            
     def draw_results(self, mouse):
         s = self.screen
         shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
