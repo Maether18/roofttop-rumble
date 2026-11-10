@@ -100,8 +100,8 @@ def main():
     ap.add_argument("--protocol", choices=["tcp", "udp"], default="tcp")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--bots", type=int, default=3)
-    ap.add_argument("--loss", type=float, default=0.0, help="UDP only: simulated loss")
-    ap.add_argument("--delay", type=int, default=0, help="UDP only: simulated delay (ms)")
+    ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1")
+    ap.add_argument("--delay", type=int, default=0, help="simulated one-way delay (ms)")
     ap.add_argument("--kill-one", type=float, default=0, help="last bot quits after N seconds of play")
     ap.add_argument("--no-start", action="store_true", help="wait for a real player to start")
     ap.add_argument("--join-only", action="store_true", help="bots join any waiting room (yours) instead of creating one")
@@ -112,7 +112,7 @@ def main():
     for i, name in enumerate(names):
         if args.protocol == "tcp":
             from tcp.client import TCPConnection
-            conn = TCPConnection(args.host, TCP_PORT, name)
+            conn = TCPConnection(args.host, TCP_PORT, name, args.loss, args.delay)
         else:
             from udp.client import UDPConnection
             conn = UDPConnection(args.host, UDP_PORT, name, args.loss, args.delay)
