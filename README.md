@@ -92,7 +92,12 @@ rooftop-rumble/
 │   └── bots.py        # bot players to test the server without 3 people
 ├── docs/
 │   └── protocol.md    # message reference
-├── requirements.txt
+├── deploy/
+│   ├── setup.sh       # one-shot setup of both servers on an Ubuntu cloud VM
+│   ├── update.sh      # pull new code and restart the servers
+│   └── rooftop-*.service  # systemd units for the TCP and UDP servers
+├── requirements.txt         # game window (pygame-ce)
+├── requirements-server.txt  # servers: standard library only
 └── README.md
 ```
 
@@ -248,6 +253,67 @@ Note: **ngrok's free tier only tunnels TCP**, so it works for the TCP version bu
 - "Can't reach the server": the server isn't running, or the firewall, port forward or tunnel is wrong. Check that the protocol and port match the server.
 - Press **F3** in a match to see the ping. Above about 300 ms the game still works, but hits feel late.
 - UDP: if a player's router changes their public port in the middle of a session (rare, because the client keeps the mapping open), the server sees a new address. That player has to reconnect with a different name, or wait 5 s for the old session to time out.
+
+## Deploy to the cloud
+
+Run both servers on a small Linux VM with a public IP, so players on any network connect straight to it. No VPN, router access or tunnel is needed. The servers use only the Python standard library (no pygame), so they run on a headless machine. TCP uses port 5000 and UDP uses port 5001, so both servers run side by side.
+
+> Until `feature` is merged into `main`, use `feature` as `<branch>` below. `main` doesn't have the `deploy/` folder yet.
+
+**1. Create the VM.** Ubuntu 22.04 or 24.04, the smallest size is enough: Azure `B1s`, AWS `t2.micro`/`t3.micro`, or Oracle `VM.Standard.E2.1.Micro` / Ampere A1. Pick a region close to the players for a lower ping. Allow SSH (port 22) and note the **public IP**.
+
+**2. Open inbound TCP 5000 and UDP 5001 in the cloud firewall.** Without this step, nothing reaches the VM.
+- **Azure**: VM → *Networking* → *Network settings* → *Create port rule* → *Inbound port rule*. Add one rule with destination port `5000`, protocol **TCP**, action Allow, and a second rule with port `5001`, protocol **UDP**. With the Azure CLI, this opens both ports for TCP and UDP:
+  ```bash
+  az vm open-port --resource-group <RESOURCE_GROUP> --name <VM_NAME> --port 5000-5001 --priority 1010
+  ```
+- **AWS**: EC2 → *Instances* → your instance → *Security* tab → click the security group → *Edit inbound rules*. Add **Custom TCP**, port `5000`, source `0.0.0.0/0`, and **Custom UDP**, port `5001`, source `0.0.0.0/0`.
+- **Oracle Cloud**: *Networking* → *Virtual cloud networks* → your VCN → your subnet → its *Security List* → *Add Ingress Rules*. Add source CIDR `0.0.0.0/0`, IP protocol **TCP**, destination port `5000`, and a second rule with **UDP** and port `5001`.
+  Oracle's Ubuntu images **also block ports in iptables** inside the VM. `setup.sh` detects this and opens the ports for you. To do it by hand:
+  ```bash
+  sudo iptables -I INPUT -p tcp --dport 5000 -j ACCEPT
+  sudo iptables -I INPUT -p udp --dport 5001 -j ACCEPT
+  sudo netfilter-persistent save
+  ```
+
+**3. SSH in and run the setup script.** It installs git and python3, puts the code in `/opt/rooftop-rumble`, installs and starts the two systemd services (they restart on failure and start on boot), and opens the ports in `ufw` if ufw is active. At the end it prints the public IP and the exact client commands.
+```bash
+ssh <user>@<VM_PUBLIC_IP>          # azureuser on Azure, ubuntu on AWS and Oracle
+curl -fsSL https://raw.githubusercontent.com/Maether18/roofttop-rumble/<branch>/deploy/setup.sh | bash -s <branch>
+```
+Or clone first and run it:
+```bash
+git clone -b <branch> https://github.com/Maether18/roofttop-rumble.git
+bash roofttop-rumble/deploy/setup.sh <branch>
+```
+Running it again is safe: it updates the code and restarts the servers.
+
+**4. Check that it's running.**
+```bash
+systemctl status rooftop-tcp rooftop-udp
+journalctl -u rooftop-udp -f        # live log: logins, disconnects (Ctrl+C to quit)
+journalctl -u rooftop-tcp -f
+```
+
+**5. Connect the clients** from any network:
+```bash
+python -m client.ui --protocol udp --host <VM_PUBLIC_IP>
+python -m client.ui --protocol tcp --host <VM_PUBLIC_IP>
+python -m tools.bots --protocol udp --host <VM_PUBLIC_IP> --bots 2 --join-only   # fill a room with bots
+```
+
+**Update after pushing new code**: `bash /opt/rooftop-rumble/deploy/update.sh`. It runs `git pull` and restarts both servers, so players in a match are disconnected. To switch branches, run `setup.sh <branch>` again.
+
+**After the demo**, stop the VM in the cloud console to save credits, or turn the servers off with `sudo systemctl disable --now rooftop-tcp rooftop-udp`. The servers have no passwords, so anyone who knows the IP can join.
+
+### Troubleshooting the cloud server
+If a client can't connect:
+1. **Cloud firewall**: check that the inbound rules for TCP 5000 and **UDP** 5001 exist (step 2). UDP is the one people forget.
+2. **Service status**: run `systemctl status rooftop-udp` (or `rooftop-tcp`). If it isn't `active (running)`, look at `journalctl -u rooftop-udp -n 50`.
+3. **VM firewall**: run `sudo ufw status` (5000/tcp and 5001/udp should be ALLOW if ufw is active). On Oracle, run `sudo iptables -L INPUT -n --line-numbers`: the ACCEPT rules must come before the REJECT rule.
+4. **Is the server listening?** `sudo ss -lntup | grep -E ':500[01]'` should show python3 on 5000 (tcp) and 5001 (udp).
+5. **Protocol and port**: the client's protocol must match the port (TCP to 5000, UDP to 5001).
+6. **Backup plan**: if the cloud network still blocks you, install Tailscale on the VM (`curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`) and on the players' computers, then connect to the VM's `tailscale ip -4` address. See [Option A](#option-a-vpn-with-tailscale-or-zerotier-recommended).
 
 ## Comparing TCP and UDP
 
