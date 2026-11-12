@@ -17,7 +17,8 @@ import threading
 import time
 
 from common import protocol as P
-from common.config import RESEND_INTERVAL, MAX_RESENDS, MAX_PACKET_SIZE
+from common.config import (RESEND_INTERVAL, RESEND_BACKOFF, MAX_RESEND_INTERVAL,
+                           MAX_RESENDS, MAX_PACKET_SIZE)
 
 
 class ReliableUDP:
@@ -125,7 +126,10 @@ class ReliableUDP:
         with self.lock:
             for key, entry in list(self.pending.items()):
                 data, last, tries = entry
-                if now - last < RESEND_INTERVAL:
+                # Exponential backoff: same first resend as before on a LAN,
+                # but later ones wait longer so a high-RTT link can answer.
+                wait = min(RESEND_INTERVAL * RESEND_BACKOFF ** tries, MAX_RESEND_INTERVAL)
+                if now - last < wait:
                     continue
                 if tries >= MAX_RESENDS:
                     failed.add(key[0])
