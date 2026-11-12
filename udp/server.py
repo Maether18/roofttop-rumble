@@ -47,6 +47,9 @@ class Server:
 
     # ---------- receiving ----------
     def handle(self, msg, addr):
+        error = P.client_message_error(msg)
+        if error:
+            return self.net.send(P.make(P.ERROR, reason=error), addr)
         with self.lock:
             client = self.by_addr.get(addr)
             if client:
@@ -112,7 +115,11 @@ class Server:
             except (ConnectionResetError, OSError):
                 continue          # Windows reports ICMP "port unreachable" this way
             for msg in messages:
-                self.handle(msg, addr)
+                try:
+                    self.handle(msg, addr)
+                except (TypeError, ValueError, KeyError, OverflowError, RecursionError) as exc:
+                    # A malformed command must not stop the shared receive loop.
+                    print(f"[invalid message] {addr}: {exc}")
 
 
 if __name__ == "__main__":

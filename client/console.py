@@ -16,6 +16,7 @@ import threading
 import time
 
 from common import protocol as P
+from client.session import MatchSession
 
 
 def show_rooms(rooms):
@@ -70,6 +71,7 @@ def show(msg, state):
 
 def run_console(conn):
     state = {"rooms": []}
+    session = MatchSession()
 
     def printer():
         while conn.connected.is_set() or not conn.messages.empty():
@@ -77,7 +79,8 @@ def run_console(conn):
                 msg = conn.messages.get(timeout=0.2)
             except Exception:
                 continue
-            show(msg, state)
+            if session.accept(msg):
+                show(msg, state)
 
     threading.Thread(target=printer, daemon=True).start()
     print(f"Connected over {conn.protocol_name}. Commands: /rooms /create /join <id> /leave /start /stats /quit")

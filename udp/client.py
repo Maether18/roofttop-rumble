@@ -21,10 +21,11 @@ class UDPConnection:
     protocol_name = "UDP"
 
     def __init__(self, host, port, name, loss=0.0, delay_ms=0):
+        P.validate_impairment(loss, delay_ms)
         self.server = (socket.gethostbyname(host), port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("0.0.0.0", 0))
-        self.net = ReliableUDP(self.sock, loss=loss, delay_ms=delay_ms)
+        self.net = ReliableUDP(self.sock, loss=loss, delay_ms=delay_ms, peer=self.server)
         self.stats = self.net.stats
         self.messages = queue.Queue()
         self.connected = threading.Event()

@@ -29,6 +29,7 @@ import pygame
 from common import protocol as P
 from common.config import TCP_PORT, UDP_PORT, SNAPSHOT_RATE, TICK_RATE
 from common.game import ARENA_WIDTH, ARENA_HEIGHT, PLATFORMS, ATTACKS
+from client.session import MatchSession
 
 WIDTH, HUD = ARENA_WIDTH, 72
 HEIGHT = ARENA_HEIGHT + HUD
@@ -123,6 +124,7 @@ class App:
         self.running = True
         self.mode = "connect"
         self.conn = None
+        self.session = MatchSession()
         self.me = None
         self.rooms = []
         self.toasts = []                    # (time, text, color)
@@ -188,6 +190,7 @@ class App:
         if self.conn:
             self.conn.close()
         self.conn = None
+        self.session = MatchSession()
         self.me = None
         self.mode = "connect"
         self.status = reason
@@ -209,6 +212,8 @@ class App:
                 break
 
     def on_message(self, msg):
+        if not self.session.accept(msg):
+            return
         t = msg["type"]
         now = time.time()
         if t == P.LOGIN_OK:
@@ -354,7 +359,7 @@ class App:
         current = dict(held, **{k + "_n": v for k, v in self.presses.items()})
         changed = current != self.last_keys
         if changed or now - self.last_input_sent >= 1 / INPUT_RATE:
-            self.conn.send(P.make(P.INPUT, **current))
+            self.conn.send(P.make(P.INPUT, match_id=self.session.match_id, **current))
             self.last_input_sent = now
             self.last_keys = current
 

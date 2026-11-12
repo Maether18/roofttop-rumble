@@ -28,12 +28,14 @@ class TCPConnection:
     protocol_name = "TCP"
 
     def __init__(self, host, port, name, loss=0.0, delay_ms=0):
+        P.validate_impairment(loss, delay_ms)
         self.loss = loss
         self.delay = delay_ms / 1000.0
         self.sock = socket.create_connection((host, port), timeout=5)
         self.sock.settimeout(None)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.send_lock = threading.Lock()
+        self.stream_send_at = 0.0
         self.out_queue = queue.Queue()
         self.messages = queue.Queue()
         self.connected = threading.Event()
@@ -67,10 +69,12 @@ class TCPConnection:
         if not self.connected.is_set():
             return
         data = P.encode_line(msg)
-        self.stats["sent"] += 1
-        # Preserve stream ordering while applying one-way delay + TCP retransmit stall
-        deliver_at = time.time() + self.delay + self._stream_stall()
-        self.out_queue.put((deliver_at, data))
+        with self.send_lock:
+            self.stats["sent"] += 1
+            # Pipeline propagation delay; loss stalls every later message.
+            self.stream_send_at = max(time.monotonic() + self.delay,
+                                      self.stream_send_at) + self._stream_stall()
+            self.out_queue.put((self.stream_send_at, data))
 
     def _send_loop(self):
         while self.connected.is_set():
@@ -78,7 +82,7 @@ class TCPConnection:
                 deliver_at, data = self.out_queue.get(timeout=0.05)
             except queue.Empty:
                 continue
-            wait = deliver_at - time.time()
+            wait = deliver_at - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
             if not self.connected.is_set():
@@ -100,7 +104,7 @@ class TCPConnection:
                     deliver_at, msgs = in_queue.get(timeout=0.05)
                 except queue.Empty:
                     continue
-                wait = deliver_at - time.time()
+                wait = deliver_at - time.monotonic()
                 if wait > 0:
                     time.sleep(wait)
                 for msg in msgs:
@@ -123,12 +127,13 @@ class TCPConnection:
             msgs = list(reader.feed(data))
             if not msgs:
                 continue
-            now = time.time()
-            # Head-of-Line blocking: if this TCP segment was lost and retransmitted,
-            # every subsequent byte in the stream is held back behind it.
-            arrival = max(now + self.delay, stream_ready_at) + self._stream_stall()
-            stream_ready_at = arrival
-            in_queue.put((arrival, msgs))
+            # Sample synthetic loss per application message, independently of
+            # how the OS happened to split/coalesce recv() chunks. Preserve HoL.
+            for msg in msgs:
+                arrival = max(time.monotonic() + self.delay,
+                              stream_ready_at) + self._stream_stall()
+                stream_ready_at = arrival
+                in_queue.put((arrival, [msg]))
 
     def _heartbeat_loop(self):
         while self.connected.is_set():

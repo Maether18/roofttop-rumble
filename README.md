@@ -64,8 +64,8 @@ All messages are JSON objects with a `type` field. Full list in [`docs/protocol.
 
 ```json
 {"type": "LOGIN", "name": "Kai"}
-{"type": "INPUT", "left": 1, "right": 0, "jump": 0, "punch": 1, "smash": 0}
-{"type": "STATE", "tick": 1520, "players": [...], "time_left": 42.5}
+{"type": "INPUT", "match_id": 1, "left": 1, "right": 0, "jump_n": 0, "punch_n": 1, "smash_n": 0}
+{"type": "STATE", "room_id": 1, "match_id": 1, "tick": 1520, "players": [...], "time_left": 42.5}
 ```
 
 ## Project structure
@@ -153,18 +153,27 @@ If clients can't connect, allow Python through the firewall on the server comput
 
 ## Comparing TCP and UDP
 
-Both versions can simulate bad network conditions so we can measure the difference fairly:
+Both versions support simulated loss and the same added one-way delay:
 
 ```bash
 python -m client.ui --protocol udp --host <SERVER_IP> --name Kai --loss 0.10 --delay 80 --log metrics.csv
 ```
+Use `--protocol tcp` for the TCP version. In both clients, `--delay 80` adds 80 ms in each direction, so an otherwise local PING round trip takes about 160 ms. UDP delays datagrams and ACKs independently without reducing the snapshot rate. TCP preserves stream order and adds synthetic retransmission stalls. Loss is sampled per application message for TCP and per datagram (including ACKs) for UDP; these application-level models illustrate transport behavior and do not measure actual TCP retransmissions.
+
 `--log` writes one row per second during matches: ping, snapshots received, snapshots missed, and the longest gap between two snapshots. Open the CSV in Excel to build the comparison charts.
 
-Metrics we measure:
-- **Perceived lag**: round-trip time between sending an input and seeing its result.
-- **Dropped updates**: game-state packets that never arrived.
-- **Desync**: moments when a client shows a different position or result than the server.
-- **Stalls**: time the game freezes while TCP waits to resend a lost packet.
+Metrics currently recorded:
+- **Ping**: PING/PONG round-trip time, including artificial delay.
+- **Missed snapshots**: gaps in the expected snapshot tick sequence.
+- **Update gaps**: the longest interval between snapshots processed by the UI.
+- **F3 counters**: synthetic TCP stalls/retries or UDP resends/stale updates (shown in the overlay).
+
+Input-to-display latency and numerical positional desynchronization are not currently measured. For network performance conclusions, use repeated controlled trials with a common external impairment setup.
+
+Run the networking, multiplayer, and headless UI regression checks from the project directory:
+```bash
+python -m unittest discover -v
+```
 
 ## Team
 

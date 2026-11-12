@@ -10,6 +10,7 @@ same rooms, rules and results. Only the transport changes.
 """
 import threading
 import time
+import queue
 
 from common import protocol as P
 from common.config import MAX_PLAYERS_PER_ROOM, TICK_RATE, SNAPSHOT_RATE, MATCH_SECONDS
@@ -26,6 +27,7 @@ class Room:
         self.players = [owner]
         self.status = WAITING
         self.game = None
+        self.match_id = None
 
     def to_dict(self):
         return {"id": self.id, "name": self.name, "owner": self.owner,
@@ -42,22 +44,43 @@ class Lobby:
         self.players = {}                 # name -> room id, or None when in the lobby
         self.rooms = {}                   # room id -> Room
         self.next_room_id = 1
+        self.next_match_id = 1
+        self.outbox = queue.Queue()
+        threading.Thread(target=self._send_loop, daemon=True).start()
 
     # ---------- sending ----------
-    # Messages are collected while holding the lock and sent after
-    # releasing it, so a slow network never blocks the game.
+    # Enqueue each batch while holding the state lock. One sender preserves
+    # that order without doing socket I/O on a simulation/room-handler thread.
     def _flush(self, out):
-        for name, msg in out:
+        if out:
+            self.outbox.put(tuple(out))
+
+    def _send_loop(self):
+        while True:
+            batch = self.outbox.get()
             try:
-                self._send(name, msg)
-            except Exception as exc:      # one broken client must not crash the server
-                self.log(f"[send error] {name}: {exc}")
+                if batch is None:
+                    return
+                for name, msg in batch:
+                    try:
+                        self._send(name, msg)
+                    except Exception as exc:
+                        self.log(f"[send error] {name}: {exc}")
+            finally:
+                self.outbox.task_done()
+
+    def close(self):
+        """Finish already queued output and stop the sender."""
+        self.outbox.put(None)
 
     def _room_list_to_all(self, out):
         msg = P.make(P.ROOM_LIST, rooms=[r.to_dict() for r in self.rooms.values()])
         out.extend((name, msg) for name in self.players)
 
     def _to_room(self, room, msg, out):
+        if msg["type"] in (P.GAME_START, P.STATE, P.EVENT, P.GAME_OVER) or (
+                msg["type"] == P.PLAYER_LEFT and room.status == PLAYING):
+            msg = dict(msg, room_id=room.id, match_id=room.match_id)
         out.extend((name, msg) for name in room.players)
 
     def _error(self, name, reason, out):
@@ -69,7 +92,7 @@ class Lobby:
         with self.lock:
             self.players[name] = None
             out.append((name, P.make(P.ROOM_LIST, rooms=[r.to_dict() for r in self.rooms.values()])))
-        self._flush(out)
+            self._flush(out)
 
     def remove_player(self, name):
         out = []
@@ -79,10 +102,15 @@ class Lobby:
             self._leave_room(name, out, reason="disconnected")
             del self.players[name]
             self._room_list_to_all(out)
-        self._flush(out)
+            self._flush(out)
 
     # ---------- messages ----------
     def handle(self, name, msg):
+        error = P.client_message_error(msg)
+        if error:
+            with self.lock:
+                self._flush([(name, P.make(P.ERROR, reason=error))])
+            return
         handler = {
             P.CREATE_ROOM: self._create_room,
             P.JOIN_ROOM: self._join_room,
@@ -96,7 +124,7 @@ class Lobby:
         with self.lock:
             if name in self.players:
                 handler(name, msg, out)
-        self._flush(out)
+            self._flush(out)
 
     def _create_room(self, name, msg, out):
         if self.players[name] is not None:
@@ -160,6 +188,8 @@ class Lobby:
         if len(room.players) < 2:
             return self._error(name, "You need at least 2 players to start", out)
         room.game = Game(room.players, duration=self.match_seconds)
+        room.match_id = self.next_match_id
+        self.next_match_id += 1
         room.status = PLAYING
         players = [{"name": f.name, "slot": f.slot} for f in room.game.fighters.values()]
         self._to_room(room, P.make(P.GAME_START, room_id=room.id, players=players,
@@ -170,7 +200,8 @@ class Lobby:
 
     def _input(self, name, msg, out):
         room = self.rooms.get(self.players[name])
-        if room and room.status == PLAYING and room.game:
+        if (room and room.status == PLAYING and room.game
+                and msg.get("match_id") == room.match_id):
             room.game.apply_input(name, msg)
 
     # ---------- game loop (one thread per playing room) ----------
@@ -195,7 +226,7 @@ class Lobby:
                     room.status, room.game = WAITING, None
                     self._room_list_to_all(out)
                     self.log(f"[game] room {room.id} finished, winner: {game.winner() or 'draw'}")
-            self._flush(out)
+                self._flush(out)
             if over:
                 return
             next_tick += dt

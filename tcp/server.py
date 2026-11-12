@@ -73,6 +73,10 @@ class Server:
                 if not data:              # empty read: the client closed the connection
                     break
                 for msg in reader.feed(data):
+                    error = P.client_message_error(msg)
+                    if error:
+                        conn.send(P.make(P.ERROR, reason=error))
+                        continue
                     if name is None:
                         name = self.login(conn, msg)
                     else:

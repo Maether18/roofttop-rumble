@@ -17,9 +17,11 @@ import time
 
 from common import protocol as P
 from common.config import TCP_PORT, UDP_PORT
+from client.session import MatchSession
 
 
 def run_bot(conn, name, is_owner, n_bots, results, no_start, kill_after, join_only=False):
+    session = MatchSession()
     presses = {"jump": 0, "punch": 0, "smash": 0}
     me, room_id, playing, started_at = None, None, False, None
     last_input = 0.0
@@ -28,7 +30,7 @@ def run_bot(conn, name, is_owner, n_bots, results, no_start, kill_after, join_on
             msg = conn.messages.get(timeout=1 / 30)
         except Exception:
             msg = None
-        if msg:
+        if msg and session.accept(msg):
             t = msg["type"]
             if t == P.ROOM_LIST:
                 rooms = msg["rooms"]
@@ -66,7 +68,7 @@ def run_bot(conn, name, is_owner, n_bots, results, no_start, kill_after, join_on
         now = time.time()
         if playing and me and now - last_input >= 1 / 30:
             last_input = now
-            conn.send(P.make(P.INPUT, **decide(name, me, presses)))
+            conn.send(P.make(P.INPUT, match_id=session.match_id, **decide(name, me, presses)))
 
 
 def decide(name, state, presses):
