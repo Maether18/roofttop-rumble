@@ -14,6 +14,7 @@ import time
 
 from common import protocol as P
 from common.config import UDP_PORT, HEARTBEAT_INTERVAL, DISCONNECT_TIMEOUT
+from common.net import resolve_host
 from udp.reliable import ReliableUDP
 
 
@@ -21,7 +22,7 @@ class UDPConnection:
     protocol_name = "UDP"
 
     def __init__(self, host, port, name, loss=0.0, delay_ms=0):
-        self.server = (socket.gethostbyname(host), port)
+        self.server = (resolve_host(host), port)   # replies are matched against this
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("0.0.0.0", 0))
         self.net = ReliableUDP(self.sock, loss=loss, delay_ms=delay_ms)
@@ -85,7 +86,7 @@ class UDPConnection:
 if __name__ == "__main__":
     from client.console import run_console
     ap = argparse.ArgumentParser(description="Rooftop Rumble UDP client (terminal)")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", help="server IP or hostname")
     ap.add_argument("--port", type=int, default=UDP_PORT)
     ap.add_argument("--name", required=True)
     ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1")

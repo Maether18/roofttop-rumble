@@ -22,6 +22,7 @@ import time
 
 from common import protocol as P
 from common.config import TCP_PORT, HEARTBEAT_INTERVAL, RESEND_INTERVAL
+from common.net import resolve_host
 
 
 class TCPConnection:
@@ -30,7 +31,7 @@ class TCPConnection:
     def __init__(self, host, port, name, loss=0.0, delay_ms=0):
         self.loss = loss
         self.delay = delay_ms / 1000.0
-        self.sock = socket.create_connection((host, port), timeout=5)
+        self.sock = socket.create_connection((resolve_host(host), port), timeout=5)
         self.sock.settimeout(None)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.send_lock = threading.Lock()
@@ -152,7 +153,7 @@ if __name__ == "__main__":
     from client.console import run_console
 
     ap = argparse.ArgumentParser(description="Rooftop Rumble TCP client (terminal)")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", help="server IP or hostname")
     ap.add_argument("--port", type=int, default=TCP_PORT)
     ap.add_argument("--name", required=True)
     ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1")

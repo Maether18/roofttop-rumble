@@ -6,6 +6,7 @@ sending INPUT messages based on the STATE they receive.
     python -m tools.bots --protocol tcp
     python -m tools.bots --protocol udp --loss 0.1 --delay 50
     python -m tools.bots --protocol tcp --bots 3 --kill-one 10   (one bot quits after 10 s)
+    python -m tools.bots --protocol udp --host myserver.example.com --port 5001
 
 Play against bots from the game window: create a room in the game,
 then run  python -m tools.bots --bots 2 --join-only  and start the match.
@@ -98,7 +99,8 @@ def decide(name, state, presses):
 def main():
     ap = argparse.ArgumentParser(description="Bot players for testing")
     ap.add_argument("--protocol", choices=["tcp", "udp"], default="tcp")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", help="server IP or hostname")
+    ap.add_argument("--port", type=int, default=0, help="default: 5000 for TCP, 5001 for UDP")
     ap.add_argument("--bots", type=int, default=3)
     ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1")
     ap.add_argument("--delay", type=int, default=0, help="simulated one-way delay (ms)")
@@ -112,10 +114,10 @@ def main():
     for i, name in enumerate(names):
         if args.protocol == "tcp":
             from tcp.client import TCPConnection
-            conn = TCPConnection(args.host, TCP_PORT, name, args.loss, args.delay)
+            conn = TCPConnection(args.host, args.port or TCP_PORT, name, args.loss, args.delay)
         else:
             from udp.client import UDPConnection
-            conn = UDPConnection(args.host, UDP_PORT, name, args.loss, args.delay)
+            conn = UDPConnection(args.host, args.port or UDP_PORT, name, args.loss, args.delay)
         kill = args.kill_one if i == len(names) - 1 else 0
         th = threading.Thread(target=run_bot, args=(conn, name, i == 0 and not args.join_only, args.bots, results,
                                                   args.no_start, kill, args.join_only))
