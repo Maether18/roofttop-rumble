@@ -1,0 +1,3 @@
+# The game servers (tcp/server.py, udp/server.py) only use the Python
+# standard library, so a headless cloud VM needs no extra packages.
+# pygame-ce (requirements.txt) is only for the game window, client/ui.py.
