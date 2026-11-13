@@ -57,7 +57,7 @@ class UDPConnection:
                     self.messages.put(msg)
 
     def _maintenance_loop(self):
-        last_ping = 0.0
+        last_ping = time.time()
         while self.connected.is_set():
             if self.net.resend_due():
                 return self._lost("The server stopped answering")

@@ -682,8 +682,8 @@ class App:
         pygame.draw.rect(surf, LINE, box, 1, border_radius=8)
         for i, line in enumerate(lines):
             draw_text(surf, line, self.fonts["mono"], TEXT if i == 0 else MUTED, (20, ARENA_HEIGHT - h - 4 + i * 18))
-
             
+
     def draw_results(self, mouse):
         s = self.screen
         shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)

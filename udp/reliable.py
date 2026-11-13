@@ -73,9 +73,6 @@ class ReliableUDP:
         to handle, in order. The list is empty for ACKs, duplicates, stale
         updates, or reliable messages held back until a gap is filled."""
         data, addr = self.sock.recvfrom(MAX_PACKET_SIZE)
-        if self.loss and random.random() < self.loss:
-            self.stats["lost_sim"] += 1
-            return [], addr
         msg = P.decode(data)
         if msg is None:
             return [], addr

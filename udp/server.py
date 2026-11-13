@@ -54,7 +54,9 @@ class Server:
         if msg["type"] == P.LOGIN:
             return self.login(msg, addr)
         if client is None:
-            return self.net.send(P.make(P.ERROR, reason="Log in first"), addr)
+            if msg["type"] != P.PING:
+                self.net.send(P.make(P.ERROR, reason="Log in first"), addr)
+            return
         name, t = client["name"], msg["type"]
         if t == P.PING:
             self.net.send(P.make(P.PONG, t=msg.get("t")), addr)
@@ -103,14 +105,20 @@ class Server:
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("0.0.0.0", self.port))
+        sock.settimeout(0.5)
         self.net = ReliableUDP(sock)
         threading.Thread(target=self.maintenance, daemon=True).start()
         print(f"UDP server listening on {local_ip()}:{self.port}")
         while True:
             try:
                 messages, addr = self.net.receive()
+            except socket.timeout:
+                continue
             except (ConnectionResetError, OSError):
                 continue          # Windows reports ICMP "port unreachable" this way
+            with self.lock:
+                if addr in self.by_addr:
+                    self.by_addr[addr]["last_seen"] = time.time()
             for msg in messages:
                 self.handle(msg, addr)
 

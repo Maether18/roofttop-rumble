@@ -108,22 +108,31 @@ def main():
     args = ap.parse_args()
 
     names = [f"Bot{i + 1}" for i in range(args.bots)]
-    results, threads = {}, []
-    for i, name in enumerate(names):
-        if args.protocol == "tcp":
-            from tcp.client import TCPConnection
-            conn = TCPConnection(args.host, TCP_PORT, name, args.loss, args.delay)
-        else:
-            from udp.client import UDPConnection
-            conn = UDPConnection(args.host, UDP_PORT, name, args.loss, args.delay)
-        kill = args.kill_one if i == len(names) - 1 else 0
-        th = threading.Thread(target=run_bot, args=(conn, name, i == 0 and not args.join_only, args.bots, results,
-                                                  args.no_start, kill, args.join_only))
-        th.start()
-        threads.append(th)
-        time.sleep(0.3)
-    for th in threads:
-        th.join()
+    results, threads, connections = {}, [], []
+    try:
+        for i, name in enumerate(names):
+            if args.protocol == "tcp":
+                from tcp.client import TCPConnection
+                conn = TCPConnection(args.host, TCP_PORT, name, args.loss, args.delay)
+            else:
+                from udp.client import UDPConnection
+                conn = UDPConnection(args.host, UDP_PORT, name, args.loss, args.delay)
+            connections.append(conn)
+            kill = args.kill_one if i == len(names) - 1 else 0
+            th = threading.Thread(target=run_bot, args=(conn, name, i == 0 and not args.join_only, args.bots, results,
+                                                      args.no_start, kill, args.join_only))
+            th.start()
+            threads.append(th)
+            time.sleep(0.3)
+        for th in threads:
+            th.join()
+    except KeyboardInterrupt:
+        print("\nStopping bots...")
+    finally:
+        for conn in connections:
+            conn.close()
+        for th in threads:
+            th.join()
     if results:
         final = next(iter(results.values()))
         print("Final ranking:")
