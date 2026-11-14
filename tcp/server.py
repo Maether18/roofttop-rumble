@@ -9,14 +9,16 @@
 
 Run: python -m tcp.server
      python -m tcp.server --duration 30     (shorter matches for testing)
+     python -m tcp.server --host 0.0.0.0 --port 5000
 """
 import argparse
 import socket
 import threading
 
 from common import protocol as P
-from common.config import TCP_PORT, DISCONNECT_TIMEOUT, MATCH_SECONDS
+from common.config import SERVER_HOST, TCP_PORT, DISCONNECT_TIMEOUT, MATCH_SECONDS
 from common.lobby import Lobby
+from common.net import print_addresses
 
 
 class Connection:
@@ -34,7 +36,8 @@ class Connection:
 
 
 class Server:
-    def __init__(self, port=TCP_PORT, match_seconds=MATCH_SECONDS):
+    def __init__(self, port=TCP_PORT, match_seconds=MATCH_SECONDS, host=SERVER_HOST):
+        self.host = host
         self.port = port
         self.clients = {}                 # name -> Connection
         self.lock = threading.Lock()
@@ -123,33 +126,22 @@ class Server:
     def run(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("0.0.0.0", self.port))
+        srv.bind((self.host, self.port))
         srv.listen()
-        print(f"TCP server listening on {local_ip()}:{self.port}")
+        print_addresses("TCP", self.host, self.port)
         while True:
             sock, addr = srv.accept()
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   # send small packets immediately
             threading.Thread(target=self.handle_client, args=(sock, addr), daemon=True).start()
 
 
-def local_ip():
-    """Best guess of this computer's LAN IP, to show clients where to connect."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))        # no packet is sent; it only picks a route
-        return s.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        s.close()
-
-
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Rooftop Rumble TCP server")
+    ap.add_argument("--host", default=SERVER_HOST, help="address to listen on (default: all interfaces)")
     ap.add_argument("--port", type=int, default=TCP_PORT)
     ap.add_argument("--duration", type=int, default=MATCH_SECONDS, help="match length in seconds")
     args = ap.parse_args()
     try:
-        Server(args.port, args.duration).run()
+        Server(args.port, args.duration, args.host).run()
     except KeyboardInterrupt:
         print("\nServer stopped")

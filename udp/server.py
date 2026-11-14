@@ -11,6 +11,7 @@
 
 Run: python -m udp.server
      python -m udp.server --duration 30     (shorter matches for testing)
+     python -m udp.server --host 0.0.0.0 --port 5001
 """
 import argparse
 import socket
@@ -18,14 +19,15 @@ import threading
 import time
 
 from common import protocol as P
-from common.config import UDP_PORT, DISCONNECT_TIMEOUT, MATCH_SECONDS
+from common.config import SERVER_HOST, UDP_PORT, DISCONNECT_TIMEOUT, MATCH_SECONDS
 from common.lobby import Lobby
-from tcp.server import local_ip
+from common.net import print_addresses
 from udp.reliable import ReliableUDP
 
 
 class Server:
-    def __init__(self, port=UDP_PORT, match_seconds=MATCH_SECONDS):
+    def __init__(self, port=UDP_PORT, match_seconds=MATCH_SECONDS, host=SERVER_HOST):
+        self.host = host
         self.port = port
         self.by_addr = {}         # addr -> {"name", "last_seen"}
         self.by_name = {}         # name -> addr
@@ -104,11 +106,11 @@ class Server:
 
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("0.0.0.0", self.port))
+        sock.bind((self.host, self.port))
         sock.settimeout(0.5)
         self.net = ReliableUDP(sock)
         threading.Thread(target=self.maintenance, daemon=True).start()
-        print(f"UDP server listening on {local_ip()}:{self.port}")
+        print_addresses("UDP", self.host, self.port)
         while True:
             try:
                 messages, addr = self.net.receive()
@@ -125,10 +127,11 @@ class Server:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Rooftop Rumble UDP server")
+    ap.add_argument("--host", default=SERVER_HOST, help="address to listen on (default: all interfaces)")
     ap.add_argument("--port", type=int, default=UDP_PORT)
     ap.add_argument("--duration", type=int, default=MATCH_SECONDS, help="match length in seconds")
     args = ap.parse_args()
     try:
-        Server(args.port, args.duration).run()
+        Server(args.port, args.duration, args.host).run()
     except KeyboardInterrupt:
         print("\nServer stopped")

@@ -8,6 +8,7 @@ TCPConnection or a UDPConnection and never needs to know which one.
 Run:
     python -m client.ui
     python -m client.ui --protocol udp --host 192.168.1.23 --name Kai
+    python -m client.ui --protocol tcp --host myserver.example.com --port 5000
     python -m client.ui --protocol udp --loss 0.1 --delay 80 --log metrics.csv
 
 Controls in a match:
@@ -22,6 +23,7 @@ import csv
 import math
 import os
 import random
+import socket
 import time
 
 import pygame
@@ -94,6 +96,8 @@ class TextField:
         pygame.draw.rect(surf, PANEL_2, self.rect, border_radius=8)
         pygame.draw.rect(surf, GOLD if self.focused else LINE, self.rect, 2 if self.focused else 1, border_radius=8)
         shown = self.text + ("|" if self.focused and int(now * 2) % 2 == 0 else "")
+        while len(shown) > 1 and fonts["body"].size(shown)[0] > self.rect.w - 24:
+            shown = shown[1:]               # long hostnames: show the end being typed
         draw_text(surf, shown, fonts["body"], TEXT, (self.rect.x + 12, self.rect.centery), "midleft")
 
     def key(self, event):
@@ -102,6 +106,10 @@ class TextField:
 
     def type(self, chars):
         self.text = (self.text + chars)[: self.max_len]
+
+
+def default_port(protocol):
+    return TCP_PORT if protocol == "tcp" else UDP_PORT
 
 
 def draw_text(surf, text, font, color, pos, anchor="topleft"):
@@ -130,7 +138,8 @@ class App:
         self.protocol = args.protocol
         self.fields = [
             TextField((330, 250, 300, 44), "Your name", args.name or "", 16),
-            TextField((330, 340, 300, 44), "Server IP address", args.host, 64),
+            TextField((330, 340, 210, 44), "Server IP or hostname", args.host, 64),
+            TextField((550, 340, 80, 44), "Port", str(args.port or default_port(args.protocol)), 5),
         ]
         self.fields[0].focused = True
         self.connect_buttons = [
@@ -158,31 +167,42 @@ class App:
 
     # ------------------------------------------------------------ connection
     def set_protocol(self, p):
+        port = self.fields[2]
+        if port.text.strip() in ("", str(default_port(self.protocol))):
+            port.text = str(default_port(p))   # follow the protocol unless the user typed a port
         self.protocol = p
 
     def connect(self):
         name = self.fields[0].text.strip()
         host = self.fields[1].text.strip() or "127.0.0.1"
+        port_text = self.fields[2].text.strip() or str(default_port(self.protocol))
         if not name:
             self.status = "Enter a name first."
             return
-        self.status = f"Connecting to {host} over {self.protocol.upper()}..."
+        if not port_text.isdigit() or not 0 < int(port_text) < 65536:
+            self.status = "Can't use that port: enter a number from 1 to 65535."
+            return
+        port = int(port_text)
+        self.status = f"Connecting to {host}:{port} over {self.protocol.upper()}..."
         self.draw()
         pygame.display.flip()
         try:
             if self.protocol == "tcp":
                 from tcp.client import TCPConnection
                 self.conn = TCPConnection(
-                    host, self.args.port or TCP_PORT, name,
+                    host, port, name,
                     loss=self.args.loss, delay_ms=self.args.delay,
                 )
             else:
                 from udp.client import UDPConnection
-                self.conn = UDPConnection(host, self.args.port or UDP_PORT, name,
+                self.conn = UDPConnection(host, port, name,
                                           loss=self.args.loss, delay_ms=self.args.delay)
+        except socket.gaierror:
+            self.conn = None
+            self.status = f"Can't find a server called '{host}'. Check the address."
         except OSError as exc:
             self.conn = None
-            self.status = f"Can't reach the server at {host}. Is it running? ({exc.__class__.__name__})"
+            self.status = f"Can't reach the server at {host}:{port}. Is it running? ({exc.__class__.__name__})"
 
     def disconnect(self, reason):
         if self.conn:
@@ -861,7 +881,7 @@ def draw_fighter(surf, p, color, is_me, fonts, now):
 def main():
     ap = argparse.ArgumentParser(description="Rooftop Rumble game client")
     ap.add_argument("--protocol", choices=["tcp", "udp"], default="tcp")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", help="server IP or hostname")
     ap.add_argument("--port", type=int, default=0, help="default: 5000 for TCP, 5001 for UDP")
     ap.add_argument("--name", default="")
     ap.add_argument("--loss", type=float, default=0.0, help="simulated packet loss, 0 to 1 (both TCP and UDP)")
